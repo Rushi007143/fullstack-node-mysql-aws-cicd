@@ -5,8 +5,8 @@ pipeline {
         APP_NAME = "Fullstack-App"
 
         // Production AWS EC2 instance where frontend + backend + MySQL run together
-        PROD_SERVER = "YOUR_PROD_SERVER_IP"
-        SSH_USER = "ubuntu"          // Ubuntu AMI = ubuntu, Amazon Linux = ec2-user
+        PROD_SERVER = "32.199.180.220"
+        SSH_USER = "ec2-user"          // Ubuntu AMI = ubuntu, Amazon Linux = ec2-user
         SSH_KEY = "/var/lib/jenkins/.ssh/id_ed25519"
 
         APP_BASE = "/var/www/fullstack-app"
