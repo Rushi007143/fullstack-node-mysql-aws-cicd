@@ -1,0 +1,5 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f8; color: #17202a; }
+.page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.card { width: 100%; max-width: 560px; background: #fff; border-radius: 16px; padding: 32px; box-shadow: 0 12px 40px rgba(0,0,0,0.08); }
+h1 { margin-top: 0; }

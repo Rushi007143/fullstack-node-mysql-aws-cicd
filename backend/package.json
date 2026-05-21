@@ -1,0 +1,36 @@
+{
+  "name": "node-mysql-backend",
+  "version": "1.0.0",
+  "description": "Node.js Express backend with MySQL, Jest tests, SonarQube and Jenkins CI/CD",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest --forceExit --detectOpenHandles --coverage --coverageReporters=lcov --coverageReporters=text",
+    "test:ci": "jest --forceExit --detectOpenHandles --coverage --coverageReporters=lcov --coverageReporters=text --reporters=default --reporters=jest-junit"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-junit": "^16.0.0",
+    "nodemon": "^3.1.4",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "coverageDirectory": "coverage",
+    "collectCoverageFrom": ["src/**/*.js", "!src/server.js", "!**/node_modules/**", "!**/tests/**"],
+    "coverageThreshold": { "global": { "lines": 20, "functions": 20, "branches": 10, "statements": 20 } },
+    "testTimeout": 30000,
+    "setupFilesAfterEnv": ["./tests/setup.js"]
+  },
+  "engines": { "node": ">=18.0.0" }
+}
