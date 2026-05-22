@@ -93,59 +93,130 @@ pipeline {
             steps {
                 sh '''
                     set -e
-                    docker rm -f ${CI_MYSQL_CONTAINER} 2>/dev/null || true
+
+                    CI_MYSQL_RUNTIME_CONTAINER="ci-mysql-fullstack-${BUILD_NUMBER}-${EXECUTOR_NUMBER}"
+                    echo "$CI_MYSQL_RUNTIME_CONTAINER" > .ci_mysql_container
+
+                    echo "MySQL CI container name: $CI_MYSQL_RUNTIME_CONTAINER"
+
+                    docker rm -f "$CI_MYSQL_RUNTIME_CONTAINER" 2>/dev/null || true
+
+                    echo "Cleaning stopped old MySQL CI containers if any..."
+                    docker ps -a \
+                      --filter "name=ci-mysql-fullstack" \
+                      --filter "status=exited" \
+                      --format "{{.Names}}" | while read old_container; do
+                        if [ -n "$old_container" ]; then
+                            echo "Removing stopped old container: $old_container"
+                            docker rm -f "$old_container" 2>/dev/null || true
+                        fi
+                    done
+
+                    echo "Starting MySQL container with dynamic host port..."
+
                     docker run -d \
-                      --name ${CI_MYSQL_CONTAINER} \
+                      --name "$CI_MYSQL_RUNTIME_CONTAINER" \
                       -e MYSQL_ROOT_PASSWORD=${CI_MYSQL_ROOT_PASS} \
                       -e MYSQL_DATABASE=${CI_MYSQL_DB} \
                       -e MYSQL_USER=${CI_MYSQL_USER} \
                       -e MYSQL_PASSWORD=${CI_MYSQL_PASS} \
-                      -p ${CI_MYSQL_PORT}:3306 \
+                      -p 127.0.0.1::3306 \
                       --health-cmd="mysqladmin ping -uroot -p${CI_MYSQL_ROOT_PASS} --silent" \
                       --health-interval=3s \
                       --health-timeout=5s \
                       --health-retries=20 \
                       mysql:8.0
 
+                    echo "Waiting for MySQL to become healthy..."
+
                     for i in $(seq 1 40); do
-                        STATUS=$(docker inspect --format='{{.State.Health.Status}}' ${CI_MYSQL_CONTAINER} 2>/dev/null || echo starting)
-                        if [ "$STATUS" = "healthy" ]; then echo "MySQL is healthy"; exit 0; fi
-                        echo "MySQL status: $STATUS ($i/40)"; sleep 3
+                        STATUS="$(docker inspect --format='{{.State.Health.Status}}' "$CI_MYSQL_RUNTIME_CONTAINER" 2>/dev/null || echo starting)"
+
+                        if [ "$STATUS" = "healthy" ]; then
+                            echo "MySQL is healthy"
+                            break
+                        fi
+
+                        echo "MySQL status: $STATUS ($i/40)"
+                        sleep 3
+
+                        if [ "$i" = "40" ]; then
+                            echo "ERROR: MySQL did not become healthy."
+                            docker logs "$CI_MYSQL_RUNTIME_CONTAINER" || true
+                            exit 1
+                        fi
                     done
-                    docker logs ${CI_MYSQL_CONTAINER} || true
-                    exit 1
+
+                    MYSQL_HOST_PORT="$(docker port "$CI_MYSQL_RUNTIME_CONTAINER" 3306/tcp | sed 's/.*://')"
+
+                    if [ -z "$MYSQL_HOST_PORT" ]; then
+                        echo "ERROR: Could not detect MySQL mapped host port."
+                        docker logs "$CI_MYSQL_RUNTIME_CONTAINER" || true
+                        exit 1
+                    fi
+
+                    echo "$MYSQL_HOST_PORT" > .ci_mysql_port
+                    echo "MySQL mapped host port: $MYSQL_HOST_PORT"
                 '''
             }
         }
 
         stage('Backend - Import Check') {
-            environment {
-                NODE_ENV = "test"
-                PORT = "0"
-                DB_HOST = "127.0.0.1"
-                DB_PORT = "3307"
-                DB_NAME = "testdb"
-                DB_USER = "ci_user"
-                DB_PASS = "ci_pass_123"
-                JWT_SECRET = "${CI_JWT_SECRET}"
+            steps {
+                dir('backend') {
+                    sh '''
+                        set -e
+
+                        if [ ! -f ../.ci_mysql_port ]; then
+                            echo "ERROR: .ci_mysql_port not found. MySQL CI stage did not complete."
+                            exit 1
+                        fi
+
+                        export NODE_ENV="test"
+                        export PORT="0"
+                        export DB_HOST="127.0.0.1"
+                        export DB_PORT="$(cat ../.ci_mysql_port)"
+                        export DB_NAME="${CI_MYSQL_DB}"
+                        export DB_USER="${CI_MYSQL_USER}"
+                        export DB_PASS="${CI_MYSQL_PASS}"
+                        export JWT_SECRET="${CI_JWT_SECRET}"
+
+                        echo "Using dynamic MySQL port: $DB_PORT"
+                        node -e "require('./src/app'); console.log('Backend import OK')"
+                    '''
+                }
             }
-            steps { dir('backend') { sh 'node -e "require(\'./src/app\'); console.log(\'Backend import OK\')"' } }
         }
 
         stage('Backend - Run Jest Tests') {
-            environment {
-                NODE_ENV = "test"
-                PORT = "0"
-                DB_HOST = "127.0.0.1"
-                DB_PORT = "3307"
-                DB_NAME = "testdb"
-                DB_USER = "ci_user"
-                DB_PASS = "ci_pass_123"
-                JWT_SECRET = "${CI_JWT_SECRET}"
-                JEST_JUNIT_OUTPUT_DIR = "test-results"
-                JEST_JUNIT_OUTPUT_NAME = "backend-results.xml"
+            steps {
+                dir('backend') {
+                    sh '''
+                        set -e
+
+                        if [ ! -f ../.ci_mysql_port ]; then
+                            echo "ERROR: .ci_mysql_port not found. MySQL CI stage did not complete."
+                            exit 1
+                        fi
+
+                        export NODE_ENV="test"
+                        export PORT="0"
+                        export DB_HOST="127.0.0.1"
+                        export DB_PORT="$(cat ../.ci_mysql_port)"
+                        export DB_NAME="${CI_MYSQL_DB}"
+                        export DB_USER="${CI_MYSQL_USER}"
+                        export DB_PASS="${CI_MYSQL_PASS}"
+                        export JWT_SECRET="${CI_JWT_SECRET}"
+                        export JEST_JUNIT_OUTPUT_DIR="test-results"
+                        export JEST_JUNIT_OUTPUT_NAME="backend-results.xml"
+
+                        echo "Using dynamic MySQL port: $DB_PORT"
+
+                        mkdir -p test-results
+                        npm run test:ci
+                    '''
+                }
             }
-            steps { dir('backend') { sh 'mkdir -p test-results && npm run test:ci' } }
             post {
                 always {
                     junit allowEmptyResults: true, testResults: 'backend/test-results/*.xml'
@@ -298,7 +369,25 @@ pipeline {
     }
 
     post {
-        always { sh 'docker rm -f ${CI_MYSQL_CONTAINER} 2>/dev/null || true' }
+        always {
+            sh '''
+                echo "Running final cleanup..."
+
+                if [ -f .ci_mysql_container ]; then
+                    CI_MYSQL_RUNTIME_CONTAINER="$(cat .ci_mysql_container)"
+                    echo "Removing MySQL CI container: $CI_MYSQL_RUNTIME_CONTAINER"
+                    docker rm -f "$CI_MYSQL_RUNTIME_CONTAINER" 2>/dev/null || true
+                    rm -f .ci_mysql_container
+                else
+                    echo "No .ci_mysql_container file found. Skipping runtime MySQL cleanup."
+                fi
+
+                rm -f .ci_mysql_port 2>/dev/null || true
+
+                # Legacy cleanup only.
+                docker rm -f ${CI_MYSQL_CONTAINER} 2>/dev/null || true
+            '''
+        }
         success { echo 'SUCCESS: CI, SonarQube and branch-based deployment completed.' }
         failure { echo 'FAILED: Pipeline stopped. Production deployment was blocked or rolled back.' }
     }
