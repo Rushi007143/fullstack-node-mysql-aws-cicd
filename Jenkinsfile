@@ -5,7 +5,7 @@ pipeline {
         APP_NAME = "Fullstack-App"
 
         // Production AWS EC2 instance
-        PROD_SERVER = "100.31.148.237"
+        PROD_SERVER = "54.85.200.56"
         SSH_USER = "ec2-user"
         SSH_KEY = "/var/lib/jenkins/.ssh/id_ed25519"
 
