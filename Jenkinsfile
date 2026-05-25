@@ -124,23 +124,18 @@ pipeline {
 
                     echo "Starting MySQL container with unique name and dynamic port..."
 
-                    CI_MYSQL_RUNTIME_CONTAINER="ci-mysql-fullstack-${BUILD_NUMBER}"
-                    echo "$CI_MYSQL_RUNTIME_CONTAINER" > .ci_mysql_container
+                    # Strong unique name avoids conflict even if an older build left a container behind.
+                    UNIQUE_ID="$(date +%s)-${BUILD_NUMBER}-$$"
+                    CI_MYSQL_RUNTIME_CONTAINER="ci-mysql-fullstack-${UNIQUE_ID}"
 
+                    echo "$CI_MYSQL_RUNTIME_CONTAINER" > .ci_mysql_container
                     echo "CI MySQL container: $CI_MYSQL_RUNTIME_CONTAINER"
 
-                    docker rm -f "$CI_MYSQL_RUNTIME_CONTAINER" 2>/dev/null || true
+                    echo "Cleaning all old CI MySQL containers before starting new one..."
+                    docker rm -f $(docker ps -aq --filter "name=ci-mysql-fullstack") 2>/dev/null || true
 
-                    echo "Cleaning stopped old CI MySQL containers..."
-                    docker ps -a \
-                      --filter "name=ci-mysql-fullstack" \
-                      --filter "status=exited" \
-                      --format "{{.Names}}" | while read old_container; do
-                        if [ -n "$old_container" ]; then
-                            echo "Removing stopped old container: $old_container"
-                            docker rm -f "$old_container" 2>/dev/null || true
-                        fi
-                    done
+                    # Give Docker a few seconds to release old container names/resources.
+                    sleep 3
 
                     docker run -d \
                       --name "$CI_MYSQL_RUNTIME_CONTAINER" \
@@ -579,6 +574,9 @@ ENDSSH
                 else
                     echo "No .ci_mysql_container file found."
                 fi
+
+                echo "Removing any remaining old CI MySQL containers..."
+                docker rm -f $(docker ps -aq --filter "name=ci-mysql-fullstack") 2>/dev/null || true
 
                 rm -f .ci_mysql_port || true
             '''
