@@ -284,35 +284,45 @@ NODECHECK
 
         stage('SonarQube Analysis') {
             steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    withSonarQubeEnv('sonarqube') {
-                        sh '''
-                            set -e
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                        set -e
 
-                            echo "Running ultra-light non-blocking SonarQube analysis..."
+                        echo "Running normal SonarQube analysis..."
 
-                            # Jenkins server has only around 1 GB RAM, so keep scanner memory low.
-                            export SONAR_SCANNER_OPTS="-Xmx256m"
+                        # Normal SonarQube scan needs more memory than t2.micro.
+                        # Recommended Jenkins size: t3.medium or higher.
+                        export SONAR_SCANNER_OPTS="-Xmx1024m"
 
-                            sonar-scanner \
-                              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                              -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
-                              -Dsonar.sources=backend/src \
-                              -Dsonar.exclusions="**/node_modules/**,**/coverage/**,**/dist/**,**/build/**,**/test-results/**" \
-                              -Dsonar.host.url=$SONAR_HOST_URL \
-                              -Dsonar.javascript.node.maxspace=256
-                        '''
-                    }
+                        SONAR_ARGS=""
+
+                        if [ -f "backend/coverage/lcov.info" ]; then
+                            SONAR_ARGS="$SONAR_ARGS -Dsonar.javascript.lcov.reportPaths=backend/coverage/lcov.info"
+                            echo "Coverage report found: backend/coverage/lcov.info"
+                        else
+                            echo "Coverage report not found. Continuing without coverage."
+                        fi
+
+                        sonar-scanner \
+                          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                          -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
+                          -Dsonar.sources=backend/src,frontend/src \
+                          -Dsonar.tests=backend/tests \
+                          -Dsonar.exclusions="**/node_modules/**,**/coverage/**,**/dist/**,**/build/**,**/test-results/**" \
+                          -Dsonar.host.url=$SONAR_HOST_URL \
+                          -Dsonar.javascript.node.maxspace=1024 \
+                          $SONAR_ARGS
+
+                        echo "SonarQube analysis completed."
+                    '''
                 }
             }
         }
 
         stage('SonarQube Quality Gate') {
             steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    timeout(time: 3, unit: 'MINUTES') {
-                        waitForQualityGate abortPipeline: false
-                    }
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
