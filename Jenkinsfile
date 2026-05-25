@@ -291,7 +291,7 @@ NODECHECK
 
                             echo "Running ultra-light non-blocking SonarQube analysis..."
 
-                            # Jenkins server has only ~1 GB RAM, so keep scanner memory low.
+                            # Jenkins server has only around 1 GB RAM, so keep scanner memory low.
                             export SONAR_SCANNER_OPTS="-Xmx256m"
 
                             sonar-scanner \
@@ -314,8 +314,6 @@ NODECHECK
                         waitForQualityGate abortPipeline: false
                     }
                 }
-            }
-        }
             }
         }
 
