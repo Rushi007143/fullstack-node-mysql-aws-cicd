@@ -4,12 +4,13 @@ pipeline {
     environment {
         APP_NAME = "Fullstack-App"
 
-        // Production AWS EC2/Ubuntu instance
+        // Production AWS EC2 instance.
+        // Your current production login is working with ec2-user, so keep this.
         PROD_SERVER = "54.85.200.56"
         SSH_USER = "ec2-user"
         SSH_KEY = "/var/lib/jenkins/.ssh/id_ed25519"
 
-        // Production paths - matching your EC2 setup
+        // Production paths
         APP_BASE = "/var/www/app"
         BACKEND_BASE = "/var/www/app/backend"
         FRONTEND_BASE = "/var/www/app/frontend"
@@ -22,6 +23,7 @@ pipeline {
         SONAR_PROJECT_KEY = "fullstack-node-mysql-app"
         SONAR_PROJECT_NAME = "Fullstack Node MySQL App"
 
+        // CI MySQL values
         CI_MYSQL_ROOT_PASS = "ci_root_pass_123"
         CI_MYSQL_DB = "testdb"
         CI_MYSQL_USER = "ci_user"
@@ -66,7 +68,6 @@ pipeline {
                     BRANCH="${BRANCH#origin/}"
 
                     echo "$BRANCH" > .current_branch
-
                     echo "Current branch: $BRANCH"
 
                     if [ "$BRANCH" = "main" ]; then
@@ -217,7 +218,10 @@ pipeline {
 
                         echo "Backend import check using MySQL port: $CI_MYSQL_PORT"
 
-                        node -e "require('./src/app'); console.log('Backend import OK')"
+                        node - <<'NODECHECK'
+require('./src/app');
+console.log('Backend import OK');
+NODECHECK
                     '''
                 }
             }
@@ -262,7 +266,6 @@ pipeline {
             post {
                 always {
                     junit allowEmptyResults: true, testResults: 'backend/test-results/*.xml'
-
                     archiveArtifacts artifacts: 'backend/coverage/**', allowEmptyArchive: true
                     archiveArtifacts artifacts: 'backend/test-results/**', allowEmptyArchive: true
                 }
@@ -362,34 +365,44 @@ pipeline {
                       -e "ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no" \
                       ./ ${SSH_USER}@${PROD_SERVER}:/tmp/${APP_NAME}-${RELEASE_ID}/
 
-                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} "
-                        set -e
+                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} <<ENDSSH
+set -e
 
-                        mkdir -p ${BACKEND_BASE}/releases/${RELEASE_ID}
-                        mkdir -p ${FRONTEND_BASE}
-                        mkdir -p ${APP_BASE}/shared
+mkdir -p ${BACKEND_BASE}/releases/${RELEASE_ID}
+mkdir -p ${FRONTEND_BASE}
+mkdir -p ${APP_BASE}/shared
 
-                        rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/backend/ ${BACKEND_BASE}/releases/${RELEASE_ID}/
+rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/backend/ ${BACKEND_BASE}/releases/${RELEASE_ID}/
 
-                        if [ -d /tmp/${APP_NAME}-${RELEASE_ID}/frontend/dist ]; then
-                            rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/frontend/dist/ ${FRONTEND_BASE}/
-                        elif [ -d /tmp/${APP_NAME}-${RELEASE_ID}/frontend/build ]; then
-                            rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/frontend/build/ ${FRONTEND_BASE}/
-                        else
-                            echo 'ERROR: Frontend build output not found.'
-                            exit 1
-                        fi
+if [ -d /tmp/${APP_NAME}-${RELEASE_ID}/frontend/dist ]; then
+    rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/frontend/dist/ ${FRONTEND_BASE}/
+elif [ -d /tmp/${APP_NAME}-${RELEASE_ID}/frontend/build ]; then
+    rsync -az --delete /tmp/${APP_NAME}-${RELEASE_ID}/frontend/build/ ${FRONTEND_BASE}/
+else
+    echo "ERROR: Frontend build output not found."
+    exit 1
+fi
 
-                        cd ${BACKEND_BASE}/releases/${RELEASE_ID}
+cd ${BACKEND_BASE}/releases/${RELEASE_ID}
 
-                        npm ci --omit=dev 2>/dev/null || npm install --production
+npm ci --omit=dev 2>/dev/null || npm install --production
 
-                        set -a && . ${SHARED_ENV} && set +a
+if [ ! -f ${SHARED_ENV} ]; then
+    echo "ERROR: Production environment file missing: ${SHARED_ENV}"
+    exit 1
+fi
 
-                        node -e 'require(\"./src/app\"); console.log(\"Production backend import OK\")'
+set -a
+. ${SHARED_ENV}
+set +a
 
-                        echo 'Release prepared successfully.'
-                    "
+node - <<'NODECHECK'
+require('./src/app');
+console.log('Production backend import OK');
+NODECHECK
+
+echo "Release prepared successfully."
+ENDSSH
                 '''
             }
         }
@@ -407,38 +420,45 @@ pipeline {
 
                     RELEASE_ID="$(cat .release_id)"
 
-                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} "
-                        set -e
+                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} <<ENDSSH
+set -e
 
-                        cd ${BACKEND_BASE}/releases/${RELEASE_ID}
+cd ${BACKEND_BASE}/releases/${RELEASE_ID}
 
-                        set -a && . ${SHARED_ENV} && set +a
+if [ ! -f ${SHARED_ENV} ]; then
+    echo "ERROR: Production environment file missing: ${SHARED_ENV}"
+    exit 1
+fi
 
-                        export PORT=19000
+set -a
+. ${SHARED_ENV}
+set +a
 
-                        rm -f /tmp/fullstack-smoke.pid /tmp/fullstack-smoke.log
+export PORT=19000
 
-                        nohup node src/server.js > /tmp/fullstack-smoke.log 2>&1 &
-                        echo \\$! > /tmp/fullstack-smoke.pid
+rm -f /tmp/fullstack-smoke.pid /tmp/fullstack-smoke.log
 
-                        for i in \\$(seq 1 25); do
-                            if curl -fsS http://127.0.0.1:19000${HEALTH_ENDPOINT} >/dev/null; then
-                                echo 'Smoke test health OK.'
-                                kill \\$(cat /tmp/fullstack-smoke.pid) 2>/dev/null || true
-                                rm -f /tmp/fullstack-smoke.pid
-                                exit 0
-                            fi
+nohup node src/server.js > /tmp/fullstack-smoke.log 2>&1 &
+echo \\$! > /tmp/fullstack-smoke.pid
 
-                            echo 'Waiting for smoke test app... '\\$i'/25'
-                            sleep 2
-                        done
+for i in \\$(seq 1 25); do
+    if curl -fsS http://127.0.0.1:19000${HEALTH_ENDPOINT} >/dev/null; then
+        echo "Smoke test health OK."
+        kill \\$(cat /tmp/fullstack-smoke.pid) 2>/dev/null || true
+        rm -f /tmp/fullstack-smoke.pid
+        exit 0
+    fi
 
-                        echo 'Smoke test failed.'
-                        cat /tmp/fullstack-smoke.log || true
-                        kill \\$(cat /tmp/fullstack-smoke.pid) 2>/dev/null || true
-                        rm -f /tmp/fullstack-smoke.pid
-                        exit 1
-                    "
+    echo "Waiting for smoke test app... \\$i/25"
+    sleep 2
+done
+
+echo "Smoke test failed."
+cat /tmp/fullstack-smoke.log || true
+kill \\$(cat /tmp/fullstack-smoke.pid) 2>/dev/null || true
+rm -f /tmp/fullstack-smoke.pid
+exit 1
+ENDSSH
                 '''
             }
         }
@@ -456,39 +476,39 @@ pipeline {
 
                     RELEASE_ID="$(cat .release_id)"
 
-                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} "
-                        set -e
+                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} <<ENDSSH
+set -e
 
-                        PREV_BACKEND=\\$(readlink -f ${BACKEND_BASE}/current 2>/dev/null || echo '')
+PREV_BACKEND=\\$(readlink -f ${BACKEND_BASE}/current 2>/dev/null || echo "")
 
-                        ln -sfn ${BACKEND_BASE}/releases/${RELEASE_ID} ${BACKEND_BASE}/current
+ln -sfn ${BACKEND_BASE}/releases/${RELEASE_ID} ${BACKEND_BASE}/current
 
-                        sudo systemctl daemon-reload
-                        sudo systemctl restart node-backend
+sudo systemctl daemon-reload
+sudo systemctl restart node-backend
 
-                        sleep 5
+sleep 5
 
-                        for i in \\$(seq 1 20); do
-                            if curl -fsS http://127.0.0.1:${BACKEND_PORT}${HEALTH_ENDPOINT} >/dev/null; then
-                                sudo systemctl reload nginx || sudo systemctl restart nginx
-                                echo 'Production deployment successful.'
-                                exit 0
-                            fi
+for i in \\$(seq 1 20); do
+    if curl -fsS http://127.0.0.1:${BACKEND_PORT}${HEALTH_ENDPOINT} >/dev/null; then
+        sudo systemctl reload nginx || sudo systemctl restart nginx
+        echo "Production deployment successful."
+        exit 0
+    fi
 
-                            echo 'Production health retry '\\$i'/20'
-                            sleep 3
-                        done
+    echo "Production health retry \\$i/20"
+    sleep 3
+done
 
-                        echo 'Health failed. Rolling back...'
+echo "Health failed. Rolling back..."
 
-                        if [ -n \"\\$PREV_BACKEND\" ]; then
-                            ln -sfn \\$PREV_BACKEND ${BACKEND_BASE}/current
-                        fi
+if [ -n "\\$PREV_BACKEND" ]; then
+    ln -sfn \\$PREV_BACKEND ${BACKEND_BASE}/current
+fi
 
-                        sudo systemctl restart node-backend
+sudo systemctl restart node-backend
 
-                        exit 1
-                    "
+exit 1
+ENDSSH
                 '''
             }
         }
@@ -502,16 +522,16 @@ pipeline {
 
             steps {
                 sh '''
-                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} "
-                        set -e
+                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} <<ENDSSH
+set -e
 
-                        sudo systemctl is-active --quiet node-backend
-                        sudo systemctl is-active --quiet nginx
+sudo systemctl is-active --quiet node-backend
+sudo systemctl is-active --quiet nginx
 
-                        curl -fsS http://127.0.0.1:${BACKEND_PORT}${HEALTH_ENDPOINT} >/dev/null
+curl -fsS http://127.0.0.1:${BACKEND_PORT}${HEALTH_ENDPOINT} >/dev/null
 
-                        echo 'Backend, Nginx and health check are OK.'
-                    "
+echo "Backend, Nginx and health check are OK."
+ENDSSH
                 '''
             }
         }
@@ -525,11 +545,13 @@ pipeline {
 
             steps {
                 sh '''
-                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} "
-                        ls -dt ${BACKEND_BASE}/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
-                        rm -rf /tmp/${APP_NAME}-* 2>/dev/null || true
-                        rm -f /tmp/fullstack-smoke.pid /tmp/fullstack-smoke.log 2>/dev/null || true
-                    " || true
+                    ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${SSH_USER}@${PROD_SERVER} <<ENDSSH
+set +e
+ls -dt ${BACKEND_BASE}/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+rm -rf /tmp/${APP_NAME}-* 2>/dev/null || true
+rm -f /tmp/fullstack-smoke.pid /tmp/fullstack-smoke.log 2>/dev/null || true
+echo "Cleanup completed."
+ENDSSH
                 '''
             }
         }
