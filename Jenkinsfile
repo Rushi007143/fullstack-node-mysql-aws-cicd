@@ -293,7 +293,10 @@ NODECHECK
                     sh '''
                         set -e
 
-                        echo "Running SonarQube analysis..."
+                        echo "Running lightweight SonarQube analysis..."
+
+                        # Keep scanner memory controlled for small Jenkins server
+                        export SONAR_SCANNER_OPTS="-Xmx512m"
 
                         SONAR_ARGS=""
 
@@ -301,13 +304,19 @@ NODECHECK
                             SONAR_ARGS="$SONAR_ARGS -Dsonar.javascript.lcov.reportPaths=backend/coverage/lcov.info"
                         fi
 
+                        # IMPORTANT:
+                        # Frontend JS analysis was failing on low-memory Jenkins server due to JS/TS analyzer WebSocket crash.
+                        # So for now, scan backend JS only. Frontend is still built in the pipeline.
+                        # After upgrading Jenkins to t3.small/t3.medium, you can change sources back to:
+                        # -Dsonar.sources=backend/src,frontend/src
                         sonar-scanner \
                           -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
                           -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
-                          -Dsonar.sources=backend/src,frontend/src \
+                          -Dsonar.sources=backend/src \
                           -Dsonar.tests=backend/tests \
                           -Dsonar.exclusions="**/node_modules/**,**/coverage/**,**/dist/**,**/build/**,**/test-results/**" \
                           -Dsonar.host.url=$SONAR_HOST_URL \
+                          -Dsonar.javascript.node.maxspace=384 \
                           $SONAR_ARGS
                     '''
                 }
