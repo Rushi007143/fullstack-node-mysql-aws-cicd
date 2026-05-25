@@ -4,9 +4,9 @@ pipeline {
     environment {
         APP_NAME = "Fullstack-App"
 
-        // Production AWS EC2 instance
+        // Production AWS EC2/Ubuntu instance
         PROD_SERVER = "54.85.200.56"
-        SSH_USER = "ec2-user"
+        SSH_USER = "ubuntu"
         SSH_KEY = "/var/lib/jenkins/.ssh/id_ed25519"
 
         // Production paths - matching your EC2 setup
